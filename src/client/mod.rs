@@ -260,6 +260,11 @@ async fn store_owned() -> bool {
 /// for, or is `None`, the whole cache (memory and store) is emptied, so one
 /// person never sees another's lists on a shared device.
 ///
+/// Pass `None` only once you know nobody is signed in, never while still
+/// finding out: it empties the cache, so an app that says "nobody" before
+/// its session check answers starts every launch cold. Resolve the user on
+/// the server (`use_server_future`), or wait for the check.
+///
 /// Until this is first called, the cache **keeps everything in memory
 /// only**. An app that never calls it is still safe, just without instant
 /// cold starts. A store written in an earlier run is still read on a cold

@@ -43,12 +43,14 @@ ndk-context = { version = "0.1.1", optional = true }
 # web: the persistent store is IndexedDB.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rexie = { version = "0.6.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+futures-channel = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 
 [features]
 default = []
 # Enable in the app's `web` feature.
-web = ["dep:rexie", "dep:wasm-bindgen"]
+web = ["dep:rexie", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:futures-channel"]
 # Enable in the app's `mobile` feature.
 mobile = ["dep:redb", "dep:jni", "dep:ndk-context"]
 # Enable in the app's `desktop` feature.

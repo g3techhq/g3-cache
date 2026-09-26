@@ -102,10 +102,28 @@ mod backend {
     not(feature = "server")
 ))]
 mod backend {
+    use futures_channel::oneshot;
     use rexie::{ObjectStore, Rexie, TransactionMode};
+    use std::future::Future;
     use wasm_bindgen::JsValue;
 
     const ENTRIES: &str = "entries";
+
+    /// Runs `work` to completion on a task of its own, and waits for it.
+    ///
+    /// A cached read is a `use_resource`, and a rerun (an invalidation, a new
+    /// key) drops its previous future wherever it was. Dropped mid-transaction,
+    /// an IndexedDB request loses the handler the browser still calls when the
+    /// request completes, which throws "closure invoked recursively or after
+    /// being dropped". Detached, the transaction always finishes; the caller
+    /// only stops waiting for it.
+    async fn detached<T: 'static>(work: impl Future<Output = T> + 'static) -> Option<T> {
+        let (answer, answered) = oneshot::channel();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = answer.send(work.await);
+        });
+        answered.await.ok()
+    }
 
     /// Opened per call: IndexedDB handles are cheap, and holding one in a
     /// static would need it to be `Sync`, which browser objects are not.
@@ -119,45 +137,58 @@ mod backend {
     }
 
     pub(crate) async fn load(key: &str) -> Option<String> {
-        let database = open().await?;
-        let transaction = database
-            .transaction(&[ENTRIES], TransactionMode::ReadOnly)
-            .ok()?;
-        let value = transaction
-            .store(ENTRIES)
-            .ok()?
-            .get(JsValue::from_str(key))
-            .await
-            .ok()?;
-        // Wait for the transaction to finish before dropping it: dropping it
-        // first drops the handler IndexedDB still calls on completion, which
-        // throws "closure invoked recursively or after being dropped".
-        let _ = transaction.done().await;
-        value?.as_string()
+        let key = key.to_string();
+        detached(async move {
+            let database = open().await?;
+            let transaction = database
+                .transaction(&[ENTRIES], TransactionMode::ReadOnly)
+                .ok()?;
+            let value = transaction
+                .store(ENTRIES)
+                .ok()?
+                .get(JsValue::from_str(&key))
+                .await
+                .ok()?;
+            // Finish the transaction before dropping it, for the same reason
+            // as `detached`: its completion handler must outlive the request.
+            let _ = transaction.done().await;
+            value?.as_string()
+        })
+        .await
+        .flatten()
     }
 
     pub(crate) async fn save(key: &str, value: &str) {
-        let Some(database) = open().await else { return };
-        let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite) else {
-            return;
-        };
-        if let Ok(store) = transaction.store(ENTRIES) {
-            let _ = store
-                .put(&JsValue::from_str(value), Some(&JsValue::from_str(key)))
-                .await;
-        }
-        let _ = transaction.done().await;
+        let (key, value) = (key.to_string(), value.to_string());
+        detached(async move {
+            let Some(database) = open().await else { return };
+            let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite)
+            else {
+                return;
+            };
+            if let Ok(store) = transaction.store(ENTRIES) {
+                let _ = store
+                    .put(&JsValue::from_str(&value), Some(&JsValue::from_str(&key)))
+                    .await;
+            }
+            let _ = transaction.done().await;
+        })
+        .await;
     }
 
     pub(crate) async fn clear() {
-        let Some(database) = open().await else { return };
-        let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite) else {
-            return;
-        };
-        if let Ok(store) = transaction.store(ENTRIES) {
-            let _ = store.clear().await;
-        }
-        let _ = transaction.done().await;
+        detached(async move {
+            let Some(database) = open().await else { return };
+            let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite)
+            else {
+                return;
+            };
+            if let Ok(store) = transaction.store(ENTRIES) {
+                let _ = store.clear().await;
+            }
+            let _ = transaction.done().await;
+        })
+        .await;
     }
 }
 

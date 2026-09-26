@@ -58,6 +58,12 @@ impl<T: 'static> Cached<T> {
         self.data.read()
     }
 
+    /// [`read`](Self::read) without subscribing: for an event handler, which
+    /// wants the value now and must not rerender when it changes.
+    pub fn peek(&self) -> ReadableRef<'_, Signal<Option<Result<T>>>> {
+        self.data.peek()
+    }
+
     /// Refetches now, keeping the current value on screen meanwhile. For a
     /// pull-to-refresh or a retry button.
     pub fn refresh(&self) {

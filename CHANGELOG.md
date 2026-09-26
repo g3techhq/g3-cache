@@ -14,7 +14,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mounted screens show before a mutation's round trip, reconciled by the
   invalidation that follows it.
 - `Cached::pending`: whether a fetch is in flight, for pull-to-refresh.
+- `Cached::peek`: the value without subscribing, for event handlers.
 - A `desktop` feature: the redb store, in the user's cache directory.
+
+### Fixed
+
+- IndexedDB requests run on a task of their own. A cached read rerunning
+  mid-request dropped the handler IndexedDB still calls, which threw
+  "closure invoked recursively or after being dropped".
 
 ## [0.1.0] - 2026-09-25
 
