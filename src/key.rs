@@ -14,7 +14,7 @@ use std::{borrow::Cow, fmt, future::Future};
 /// [`use_cached_key`](crate::use_cached_key):
 ///
 /// ```
-/// use g3_kit::CacheKey;
+/// use g3_cache::CacheKey;
 ///
 /// let key = CacheKey::new("home_shelves").with("movie").with(3);
 /// assert_eq!(key.name(), "home_shelves");
@@ -48,7 +48,7 @@ impl CacheKey {
     /// for example). That is a bug in the key, not a runtime condition.
     pub fn with(mut self, part: impl Serialize) -> Self {
         let json = serde_json::to_string(&part)
-            .unwrap_or_else(|err| panic!("g3-kit: a key argument must serialize to JSON: {err}"));
+            .unwrap_or_else(|err| panic!("g3-cache: a key argument must serialize to JSON: {err}"));
         if !self.args.is_empty() {
             self.args.push(',');
         }
@@ -71,7 +71,7 @@ impl CacheKey {
     {
         let _ = server_fn;
         let args = serde_json::to_string(args).unwrap_or_else(|err| {
-            panic!("g3-kit: server function arguments must serialize to JSON: {err}")
+            panic!("g3-cache: server function arguments must serialize to JSON: {err}")
         });
         Self {
             name: Cow::Borrowed(fn_name::<F>()),
@@ -108,7 +108,7 @@ pub(crate) fn fn_name<F>() -> &'static str {
     let name = std::any::type_name::<F>();
     assert!(
         !name.contains("{{closure}}"),
-        "g3-kit: `{name}` is a closure. Pass the server function itself, with its \
+        "g3-cache: `{name}` is a closure. Pass the server function itself, with its \
          arguments as a tuple: `use_cached(get_media, (id,))`, not \
          `use_cached(|| get_media(id), ())`. For a read that is not one \
          server function call, use `use_cached_key` with a `CacheKey`."

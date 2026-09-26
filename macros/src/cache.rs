@@ -23,7 +23,7 @@ const VIEWER_WORDS: &[&str] = &[
     "bearer",
 ];
 
-pub(crate) const ROUTE_ATTRS: &[&str] = &["get", "post", "put", "patch", "delete", "server"];
+const ROUTE_ATTRS: &[&str] = &["get", "post", "put", "patch", "delete", "server"];
 
 struct Args {
     cdn: Option<u32>,
@@ -129,7 +129,7 @@ fn parse_duration(text: &str) -> Option<u64> {
     (secs > 0).then_some(secs)
 }
 
-pub(crate) fn route_name(attr: &Attribute) -> Option<String> {
+fn route_name(attr: &Attribute) -> Option<String> {
     let name = attr.path().segments.last()?.ident.to_string();
     ROUTE_ATTRS.contains(&name.as_str()).then_some(name)
 }
@@ -284,9 +284,9 @@ pub(crate) fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<Toke
         let body = function.block.clone();
         let span = function.block.span();
         *function.block = syn::parse2(quote_spanned! {span=> {
-            static __G3_CACHE_SHARED: ::g3_kit::__private::SharedCache<#ok> =
-                ::g3_kit::__private::SharedCache::new(::core::time::Duration::from_secs(#secs), #capacity);
-            let __g3_cache_key = ::g3_kit::__private::args_key(&(#(&#arg_names,)*));
+            static __G3_CACHE_SHARED: ::g3_cache::__private::SharedCache<#ok> =
+                ::g3_cache::__private::SharedCache::new(::core::time::Duration::from_secs(#secs), #capacity);
+            let __g3_cache_key = ::g3_cache::__private::args_key(&(#(&#arg_names,)*));
             __G3_CACHE_SHARED
                 .get_or_fetch(__g3_cache_key, async move #body)
                 .await
@@ -295,7 +295,7 @@ pub(crate) fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<Toke
 
     if let Some(secs) = args.cdn {
         function.attrs.push(syn::parse_quote! {
-            #[middleware(::g3_kit::__private::cdn_cache_for(#secs))]
+            #[middleware(::g3_cache::__private::cdn_cache_for(#secs))]
         });
     }
 

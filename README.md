@@ -1,37 +1,30 @@
-# g3-kit
+# g3-cache
 
-[![CI](https://github.com/g3techhq/g3-kit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/g3techhq/g3-kit/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/g3-kit.svg)](https://crates.io/crates/g3-kit)
-[![docs.rs](https://docs.rs/g3-kit/badge.svg)](https://docs.rs/g3-kit)
-[![License](https://img.shields.io/crates/l/g3-kit.svg)](#license)
+[![CI](https://github.com/g3techhq/g3-cache/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/g3techhq/g3-cache/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/g3-cache.svg)](https://crates.io/crates/g3-cache)
+[![docs.rs](https://docs.rs/g3-cache/badge.svg)](https://docs.rs/g3-cache)
+[![License](https://img.shields.io/crates/l/g3-cache.svg)](#license)
 
-The shared core of g3 stack apps: the infrastructure every Dioxus fullstack
-app on the stack needs, written once and fixed once, behind feature flags.
-
-| Area | Feature | What it gives you |
-|---|---|---|
-| [Caching](#caching) | `cache` | `use_cached` on the device, `#[cache_shared]` on the server and CDN, `invalidate_cached` |
-| [Auth](#auth) | `auth` | Sessions in SurrealDB, the signed-in user on every request, a deny-by-default guard, and `#[public]` for what a signed-out visitor may call |
+Caching for Dioxus fullstack apps, part of the g3 stack: on the device, on
+the server, and at the CDN, with checks against caching the wrong thing in
+the wrong place.
 
 ## Setup
 
-Turn on the areas the app uses on the dependency itself, and each platform
-feature in the app's feature of the same name:
-
 ```toml
 [dependencies]
-g3-kit = { version = "0.1", features = ["cache", "auth"] }
+g3-cache = "0.1"
 
 [features]
-web = ["dioxus/web", "g3-kit/web"]          # client cache persists to IndexedDB
-mobile = ["dioxus/mobile", "g3-kit/mobile"] # client cache persists to a redb file
-server = ["dioxus/server", "g3-kit/server"] # server halves of every area; client cache off
+web = ["dioxus/web", "g3-cache/web"]          # IndexedDB store
+mobile = ["dioxus/mobile", "g3-cache/mobile"] # redb file store
+server = ["dioxus/server", "g3-cache/server"] # server + CDN caches; client cache off
 ```
 
-## Caching
+## Usage
 
 ```rust
-use g3_kit::{cache_shared, invalidate_cached, use_cached};
+use g3_cache::{cache_shared, invalidate_cached, use_cached};
 
 // A screen: show the last known answer at once, refetch in the background.
 let media = use_cached(get_media, (id.clone(),));
@@ -46,7 +39,7 @@ invalidate_cached(get_my_rating);
 pub async fn get_trending(media_type: Option<MediaType>) -> Result<Vec<Media>> { .. }
 ```
 
-### Choosing a cache
+## Choosing a cache
 
 | | Client | Server | CDN |
 |---|---|---|---|
@@ -73,7 +66,7 @@ DESCRIPTIONS.get_or_fetch(media_id, google_description(&media)).await
 In the app:
 
 ```rust
-use g3_kit::{CacheConfig, set_cache_owner, use_client_cache};
+use g3_cache::{CacheConfig, set_cache_owner, use_client_cache};
 
 fn App() -> Element {
     // Once, first thing in the root component.
@@ -87,7 +80,7 @@ fn App() -> Element {
 ```rust
 // Server router: once, outside the session layer.
 .layer(session_layer)
-.layer(g3_kit::cdn_cache_guard("/api"))
+.layer(g3_cache::cdn_cache_guard("/api"))
 ```
 
 Only standard `Cache-Control` headers are sent (`public`, `s-maxage`,
@@ -105,79 +98,6 @@ What you still have to handle:
   compile-time check catches session-like extractors, not every way a
   function can read the visitor.
 
-## Auth
-
-Every request needs a signed-in user unless it is for a static asset, or a
-page or server function marked `#[public]`:
-
-```rust
-/// The splash asks this before it knows whether anyone is signed in.
-#[g3_kit::public]
-#[get("/api/v1/is_signed_in", ctx: SessionContext)]
-pub async fn is_signed_in() -> Result<bool> {
-    Ok(!ctx.session_user.anonymous)
-}
-```
-
-Pages are marked on the route enum, next to `#[route]`:
-
-```rust
-#[derive(Clone, Routable, PartialEq, PublicRoutes)]
-enum Route {
-    #[redirect("/:..segments", |segments: Vec<String>| Route::Splash {})]
-    #[public]
-    #[route("/")]
-    Splash {},
-    #[nest("/games/:game_id")]
-        #[public]
-        #[route("/join")]
-        JoinGame { game_id: String },
-    #[end_nest]
-    #[route("/home")]
-    Home {},
-}
-```
-
-Forgetting `#[public]` is the safe mistake: a signed-out caller gets a `401`
-JSON body the client can decode, and a signed-out page load is redirected
-to the splash. Opening an endpoint up is one reviewable line next to the
-function or page, not an edit to a list somewhere else.
-`auth::public_endpoints()` and `Route::PUBLIC_PATTERNS` list them all, for
-pinning in a test.
-
-Setup, innermost layer first:
-
-```rust
-use g3_kit::auth::{AuthGuard, AuthSessionLayer, AuthUser, PublicRoutes, require_session};
-
-pub enum AppUser {}
-impl AuthUser for AppUser {} // table `user`, name field `display_name`
-
-pub type SessionContext = g3_kit::auth::SessionContext<AppUser, Client>;
-
-// Panics at startup if the splash isn't `#[public]`: the redirect would loop.
-let guard = AuthGuard::for_routes(Route::Splash {});
-
-dioxus::server::router(App)
-    .layer(Extension(Arc::clone(&db)))
-    .layer(from_fn_with_state(guard, require_session::<AppUser, Client>))
-    .layer(AuthSessionLayer::<AppUser, Client>::new(Some(Arc::clone(&db))))
-    .layer(SessionLayer::new(session_store))
-```
-
-Sessions live in SurrealDB through `SurrealSessionPool`; load
-`auth::SESSIONS_SCHEMA` for its table. Mark the session cookie `Secure` in
-production: `SessionConfig::default().with_secure(!cfg!(debug_assertions))`.
-
-The derive matches request paths against the marked routes' own patterns and
-never parses a path into the enum: a catch-all
-`#[redirect("/:..segments", ..)]` parses *every* path, including every `/api/`
-one, as its target, so "parses as the splash" would open the whole app. For
-the same reason it refuses `#[public]` on a top-level catch-all route.
-
-A server function called during server-side rendering runs without any
-middleware, so the guard covers HTTP requests only. Functions acting on
-"the current user" should still check `session_user.anonymous`.
 
 ## Test bed
 

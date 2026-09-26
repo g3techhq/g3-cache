@@ -1,5 +1,5 @@
 [package]
-name = "g3-kit-testbed"
+name = "g3-cache-testbed"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -10,11 +10,11 @@ publish = false
 
 [dependencies]
 dioxus = { version = "=0.7.9", features = ["fullstack"] }
-g3-kit = { path = "..", features = ["cache"] }
+g3-cache = { path = ".." }
 serde = { version = "1.0.217", features = ["derive"] }
 
 [features]
 default = ["web"]
-web = ["dioxus/web", "g3-kit/web"]
-mobile = ["dioxus/mobile", "g3-kit/mobile"]
-server = ["dioxus/server", "g3-kit/server"]
+web = ["dioxus/web", "g3-cache/web"]
+mobile = ["dioxus/mobile", "g3-cache/mobile"]
+server = ["dioxus/server", "g3-cache/server"]

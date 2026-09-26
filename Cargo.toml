@@ -1,23 +1,23 @@
 [package]
-name = "g3-kit"
+name = "g3-cache"
 version = "0.1.0"
 
 edition = "2024"
-description = "The shared core of g3 stack apps: client, server and CDN caching, and session auth, for Dioxus fullstack."
-repository = "https://github.com/g3techhq/g3-kit"
+description = "Client, server and CDN caching for Dioxus fullstack apps, with guards against caching the wrong thing."
+repository = "https://github.com/g3techhq/g3-cache"
 readme = "README.md"
-documentation = "https://docs.rs/g3-kit"
+documentation = "https://docs.rs/g3-cache"
 license = "MIT OR Apache-2.0"
-keywords = ["dioxus", "fullstack", "cache", "auth", "surrealdb"]
-categories = ["caching", "authentication", "gui", "wasm", "web-programming"]
+keywords = ["dioxus", "cache", "fullstack", "cdn", "offline"]
+categories = ["caching", "gui", "wasm", "web-programming"]
 include = ["Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE", "src/**"]
 
 [lib]
-name = "g3_kit"
+name = "g3_cache"
 path = "src/lib.rs"
 
 [dependencies]
-g3-kit-macros = { version = "0.1.0", path = "macros" }
+g3-cache-macros = { version = "0.1.0", path = "macros" }
 dioxus = { version = "0.7.9", default-features = false, features = ["signals", "hooks", "document"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.140"
@@ -26,18 +26,10 @@ tracing = "0.1"
 tower-layer = "0.3"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "wasmbind"] }
 
-# server: in-process caches, CDN headers, sessions and the auth guard.
+# server: in-process caches and CDN headers.
+moka = { version = "0.12.16", features = ["future"], optional = true }
 axum = { version = "0.8.9", default-features = false, optional = true }
 tower-service = { version = "0.3", optional = true }
-moka = { version = "0.12.16", features = ["future"], optional = true }
-axum_session = { version = "0.20.1", optional = true }
-axum_session_auth = { version = "0.20.0", optional = true }
-async-trait = { version = "0.1.88", optional = true }
-anyhow = { version = "1.0.98", optional = true }
-inventory = { version = "0.3.20", optional = true }
-# Pinned exactly, like the apps: one copy of SurrealDB in the graph.
-surrealdb = { version = "=3.2.4", default-features = false, optional = true }
-surrealdb-types = { version = "=3.2.4", optional = true }
 
 # mobile: the persistent store is a redb file in the OS cache directory.
 redb = { version = "4.3.0", optional = true }
@@ -53,45 +45,16 @@ wasm-bindgen = { version = "0.2", optional = true }
 
 [features]
 default = []
-
-# Areas: which parts of the crate compile. Enable them on the dependency
-# itself, so every build of the app sees the same API.
-cache = []
-auth = []
-
-# Platforms: enable each in the app feature of the same name.
+# Enable in the app's `web` feature.
 web = ["dep:rexie", "dep:wasm-bindgen"]
+# Enable in the app's `mobile` feature.
 mobile = ["dep:redb", "dep:jni", "dep:ndk-context"]
-# Brings in the server dependencies of every area; the area features decide
-# which code uses them. Turns the client cache off.
-server = [
-    "dep:axum",
-    "dep:tower-service",
-    "dep:moka",
-    "dep:axum_session",
-    "dep:axum_session_auth",
-    "dep:async-trait",
-    "dep:anyhow",
-    "dep:inventory",
-    "dep:surrealdb",
-    "dep:surrealdb-types",
-]
+# Enable in the app's `server` feature. Turns the client cache off.
+server = ["dep:moka", "dep:axum", "dep:tower-service"]
 
 [dev-dependencies]
-# `server` too: the integration tests expand real server functions.
-dioxus = { version = "0.7.9", features = ["fullstack", "server", "router"] }
+dioxus = { version = "0.7.9", features = ["fullstack"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread"] }
-# An in-memory database for the session store and user loading tests.
-surrealdb = { version = "=3.2.4", default-features = false, features = ["kv-mem"] }
-
-# surrealdb-core is most of the database engine, and its debug info runs past
-# a gigabyte, relinked into every test binary. Only applies to building this
-# crate itself; apps set their own.
-[profile.dev.package.surrealdb-core]
-debug = false
-
-[profile.dev.package.surrealdb]
-debug = false
 
 [package.metadata.docs.rs]
-features = ["cache", "auth", "server"]
+features = ["server"]

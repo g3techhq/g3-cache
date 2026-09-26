@@ -17,7 +17,7 @@
 //! let router = dioxus::server::router(App)
 //!     .layer(session_layer)
 //!     // Outside the session layer, so it sees the cookie that layer adds.
-//!     .layer(g3_kit::cdn_cache_guard("/api"));
+//!     .layer(g3_cache::cdn_cache_guard("/api"));
 //! ```
 //!
 //! # Providers

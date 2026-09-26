@@ -33,7 +33,7 @@ const OWNER_KEY: &str = "\u{1f}owner";
 /// Settings for the client cache, given once to [`use_client_cache`].
 ///
 /// ```
-/// use g3_kit::CacheConfig;
+/// use g3_cache::CacheConfig;
 /// use std::time::Duration;
 ///
 /// let config = CacheConfig::new("media-mancer").keep_for(Duration::from_secs(3 * 24 * 60 * 60));
@@ -105,7 +105,7 @@ impl CacheConfig {
 static CONFIG: OnceLock<CacheConfig> = OnceLock::new();
 
 pub(crate) fn config() -> &'static CacheConfig {
-    CONFIG.get_or_init(|| CacheConfig::new("g3-kit"))
+    CONFIG.get_or_init(|| CacheConfig::new("g3-cache"))
 }
 
 /// Sets up the client cache. Call once, at the top of the app's root
@@ -113,13 +113,13 @@ pub(crate) fn config() -> &'static CacheConfig {
 ///
 /// ```ignore
 /// fn App() -> Element {
-///     g3_kit::use_client_cache(g3_kit::CacheConfig::new("media-mancer"));
+///     g3_cache::use_client_cache(g3_cache::CacheConfig::new("media-mancer"));
 ///     // ...
 /// }
 /// ```
 ///
 /// Without it, reads are still cached with default settings, but a store
-/// named `g3-kit` is shared with any other g3 app on the same origin, and
+/// named `g3-cache` is shared with any other g3 app on the same origin, and
 /// nothing refetches on focus.
 ///
 /// Persisting reads to disk also needs [`set_cache_owner`]: until the app has
@@ -133,7 +133,7 @@ pub fn use_client_cache(config: CacheConfig) {
         }
         if CONFIG.set(config).is_err() {
             tracing::warn!(
-                "g3-kit: `use_client_cache` ran more than once, or after the first cached \
+                "g3-cache: `use_client_cache` ran more than once, or after the first cached \
                  read; the later settings are ignored. Call it once, first thing in the root \
                  component."
             );
@@ -305,9 +305,9 @@ fn mark_stale(matches: impl Fn(&CacheKey) -> bool) {
 ///
 /// ```ignore
 /// save_rating(media_id.clone(), score).await?;
-/// g3_kit::invalidate_cached(get_my_rating);
-/// g3_kit::invalidate_cached(get_my_ratings);
-/// g3_kit::invalidate_cached(get_profile_stats);
+/// g3_cache::invalidate_cached(get_my_rating);
+/// g3_cache::invalidate_cached(get_my_ratings);
+/// g3_cache::invalidate_cached(get_profile_stats);
 /// ```
 ///
 /// Only the mutation knows which reads it affects, so this cannot be
@@ -323,14 +323,14 @@ where
     F: CacheableFn<Args>,
 {
     let _ = server_fn;
-    let name = crate::cache::key::fn_name::<F>();
+    let name = crate::key::fn_name::<F>();
     mark_stale(|key| key.name() == name);
 }
 
 /// Refetches one cached call: `server_fn` with exactly these `args`.
 ///
 /// ```ignore
-/// g3_kit::invalidate_cached_call(get_list_items, (list_id.clone(),));
+/// g3_cache::invalidate_cached_call(get_list_items, (list_id.clone(),));
 /// ```
 pub fn invalidate_cached_call<F, Args>(server_fn: F, args: Args)
 where

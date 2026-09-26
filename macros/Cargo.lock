@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "g3-kit-macros"
+name = "g3-cache-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",

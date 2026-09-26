@@ -1,4 +1,4 @@
-//! Exercises g3-kit's cache against real Dioxus server functions:
+//! Exercises g3-cache's cache against real Dioxus server functions:
 //!
 //! - `dx serve --web` to click through the client cache;
 //! - `curl -i localhost:8080/api/trending` twice: the header is `public`,
@@ -7,7 +7,7 @@
 //!   guard, and `looked_up` stays at 1 across ids thanks to `ServerCache`.
 
 use dioxus::prelude::*;
-use g3_kit::{
+use g3_cache::{
     CacheConfig, cache_shared, invalidate_cached, set_cache_owner, use_cached, use_client_cache,
 };
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ pub async fn get_trending(kind: Option<String>) -> Result<Trending> {
 /// server: the "outside API" below runs once per hour, whatever the id.
 #[get("/api/title?id")]
 pub async fn get_title(id: String) -> Result<String> {
-    use g3_kit::ServerCache;
+    use g3_cache::ServerCache;
     use std::{
         sync::atomic::{AtomicU32, Ordering},
         time::Duration,
@@ -61,7 +61,7 @@ pub async fn rate(id: String, score: u8) -> Result<()> {
 fn main() {
     #[cfg(feature = "server")]
     dioxus::serve(|| async move {
-        Ok(dioxus::server::router(App).layer(g3_kit::cdn_cache_guard("/api")))
+        Ok(dioxus::server::router(App).layer(g3_cache::cdn_cache_guard("/api")))
     });
 
     #[cfg(not(feature = "server"))]
@@ -70,14 +70,14 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    use_client_cache(CacheConfig::new("g3-kit-testbed"));
+    use_client_cache(CacheConfig::new("g3-cache-testbed"));
     use_hook(|| spawn(set_cache_owner(Some("testbed-user".to_string()))));
 
     let trending = use_cached(get_trending, (None,));
     let title = use_cached(get_title, ("a".to_string(),));
 
     rsx! {
-        h1 { "g3-kit testbed" }
+        h1 { "g3-cache testbed" }
         p { "trending: {trending.read():?}" }
         p { "title: {title.read():?}" }
         button {

@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish g3-kit crates
+    name: Publish g3-cache crates
     runs-on: ubuntu-latest
     environment: crates-io
 
@@ -52,7 +52,7 @@ jobs:
 
           if [[ "${DRY_RUN}" == "true" ]]; then
             cargo publish --dry-run --manifest-path macros/Cargo.toml
-            echo "Listing package files for g3-kit; full dry-run requires g3-kit-macros to exist on crates.io first."
+            echo "Listing package files for g3-cache; full dry-run requires g3-cache-macros to exist on crates.io first."
             cargo package --list
             exit 0
           fi
@@ -63,18 +63,18 @@ jobs:
           # unchanged macros version is a hard error ("already exists on the
           # crates.io index") that would strand the main crate unpublished, so
           # only publish macros when this version is genuinely new.
-          if cargo info "g3-kit-macros@${MACROS_VERSION}" >/dev/null 2>&1; then
-            echo "g3-kit-macros ${MACROS_VERSION} is already on crates.io; skipping it."
+          if cargo info "g3-cache-macros@${MACROS_VERSION}" >/dev/null 2>&1; then
+            echo "g3-cache-macros ${MACROS_VERSION} is already on crates.io; skipping it."
           else
             cargo publish --manifest-path macros/Cargo.toml
 
             for attempt in {1..30}; do
-              if cargo info "g3-kit-macros@${MACROS_VERSION}" >/dev/null 2>&1; then
+              if cargo info "g3-cache-macros@${MACROS_VERSION}" >/dev/null 2>&1; then
                 break
               fi
 
               if [[ "${attempt}" == "30" ]]; then
-                echo "g3-kit-macros ${MACROS_VERSION} did not reach the crates.io index in time" >&2
+                echo "g3-cache-macros ${MACROS_VERSION} did not reach the crates.io index in time" >&2
                 exit 1
               fi
 

@@ -31,7 +31,7 @@ use std::{future::Future, hash::Hash, ops::Deref, sync::OnceLock, time::Duration
 /// it is built on first use:
 ///
 /// ```
-/// use g3_kit::ServerCache;
+/// use g3_cache::ServerCache;
 /// use std::time::Duration;
 ///
 /// static DESCRIPTIONS: ServerCache<String, Option<String>> =

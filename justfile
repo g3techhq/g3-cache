@@ -15,26 +15,26 @@ format-check:
     cargo fmt --manifest-path macros/Cargo.toml -- --check
 
 check:
-    cargo check --features cache,auth
-    cargo check --features cache,auth,server
-    cargo check --features cache,auth,mobile
-    cargo check --features web,cache,auth --target wasm32-unknown-unknown
+    cargo check
+    cargo check --features server
+    cargo check --features mobile
+    cargo check --features web --target wasm32-unknown-unknown
     cargo check --manifest-path macros/Cargo.toml
 
 lint:
-    cargo clippy --all-targets --no-deps --features cache,auth,server
+    cargo clippy --all-targets --no-deps --features server
     cargo clippy --manifest-path macros/Cargo.toml --all-targets --no-deps
 
 lint-strict:
-    cargo clippy --all-targets --no-deps --features cache,auth,server -- -D warnings
-    cargo clippy --no-deps --features cache,auth,mobile -- -D warnings
-    cargo clippy --no-deps --features web,cache,auth --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy --all-targets --no-deps --features server -- -D warnings
+    cargo clippy --no-deps --features mobile -- -D warnings
+    cargo clippy --no-deps --features web --target wasm32-unknown-unknown -- -D warnings
     cargo clippy --manifest-path macros/Cargo.toml --all-targets --no-deps -- -D warnings
 
 test:
-    cargo nextest run --features cache,auth,server
+    cargo nextest run --features server
     cargo nextest run --manifest-path macros/Cargo.toml --no-tests pass
-    cargo test --doc --features cache,auth,server
+    cargo test --doc --features server
     cargo test --doc --manifest-path macros/Cargo.toml
 
 spell:

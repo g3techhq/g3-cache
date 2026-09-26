@@ -1,15 +1,10 @@
 [graph]
 all-features = false
-# Every area and the server build, so their dependencies are checked too.
-features = ["cache", "auth", "server"]
+# The server build too, so its dependencies are checked.
+features = ["server"]
 
 [advisories]
-# Both arrive only through surrealdb-core (which the apps already depend on)
-# and neither is used by this crate. Revisit when SurrealDB updates them.
-ignore = [
-    { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; via surrealdb-core -> surrealmx" },
-    { id = "RUSTSEC-2023-0071", reason = "rsa timing side channel, no fix upstream; via surrealdb-core -> jsonwebtoken, not used for decryption here" },
-]
+ignore = []
 
 [licenses]
 allow = [
@@ -27,18 +22,8 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
-# Only for what the `auth` server build pulls in through SurrealDB, which the
-# apps already depend on. Nothing else may bring these licenses in.
 exceptions = [
-    { crate = "surrealdb", allow = ["BUSL-1.1"] },
-    { crate = "surrealdb-collections", allow = ["BUSL-1.1"] },
-    { crate = "surrealdb-core", allow = ["BUSL-1.1"] },
-    { crate = "surrealdb-protocol", allow = ["BUSL-1.1"] },
-    { crate = "surrealdb-strand", allow = ["BUSL-1.1"] },
-    { crate = "surrealdb-types", allow = ["BUSL-1.1"] },
-    { crate = "surrealdb-types-derive", allow = ["BUSL-1.1"] },
-    { crate = "ext-sort", allow = ["Unlicense"] },
-    # The Mozilla CA certificate dataset.
+    # The Mozilla CA certificate dataset, through the HTTP client stack.
     { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
 ]
 

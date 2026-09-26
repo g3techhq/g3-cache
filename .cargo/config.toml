@@ -1,5 +1,0 @@
-# SurrealDB pulls in aws-lc-sys, which assembles with NASM on Windows. Use its
-# prebuilt objects instead, so building this crate on its own needs no NASM.
-# Apps that depend on g3-kit resolve this their own way.
-[env]
-AWS_LC_SYS_PREBUILT_NASM = "1"

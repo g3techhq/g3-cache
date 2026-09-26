@@ -1,7 +1,0 @@
-DEFINE TABLE IF NOT EXISTS sessions TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
-
-DEFINE FIELD IF NOT EXISTS sessionstore ON sessions TYPE string;
-DEFINE FIELD IF NOT EXISTS sessionexpires ON sessions TYPE string;
-DEFINE FIELD IF NOT EXISTS sessionid ON sessions TYPE string;
-
-DEFINE INDEX IF NOT EXISTS sessionid_idx ON sessions FIELDS sessionid UNIQUE;
