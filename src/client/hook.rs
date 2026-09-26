@@ -38,6 +38,7 @@ type Fetch<T> = Rc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<T>>>>>;
 pub struct Cached<T: 'static> {
     data: Signal<Option<Result<T>>>,
     key: Signal<CacheKey>,
+    pending: Signal<bool>,
 }
 
 impl<T> Clone for Cached<T> {
@@ -61,6 +62,13 @@ impl<T: 'static> Cached<T> {
     /// pull-to-refresh or a retry button.
     pub fn refresh(&self) {
         invalidate_cached_key(&self.key.peek());
+    }
+
+    /// Whether a fetch is in flight, whether or not there is a value on
+    /// screen meanwhile. For a pull-to-refresh spinner, or a "refreshing"
+    /// hint over a list that is already showing.
+    pub fn pending(&self) -> bool {
+        (self.pending)()
     }
 }
 
@@ -166,6 +174,7 @@ where
 {
     let mut data = use_signal(|| remembered::<T>(&key).map(|(value, _)| Ok(value)));
     let mut current_key = use_signal(|| key.clone());
+    let mut pending = use_signal(|| false);
     if *current_key.peek() != key {
         current_key.set(key);
     }
@@ -196,6 +205,10 @@ where
                     };
                     if current {
                         loaded.set(Some(key));
+                        // A rerun can cancel an earlier one mid-fetch.
+                        if *pending.peek() {
+                            pending.set(false);
+                        }
                         return;
                     }
                 }
@@ -211,7 +224,11 @@ where
                 },
             }
 
+            // Cleared by whichever run finishes last: a rerun cancels this one
+            // mid-fetch, and sets it again itself.
+            pending.set(true);
             let result = fetch().await;
+            pending.set(false);
             if *current_key.peek() != key {
                 // The screen moved on to another key while this was in flight.
                 return;
@@ -237,6 +254,7 @@ where
     Cached {
         data,
         key: current_key,
+        pending,
     }
 }
 

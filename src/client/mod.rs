@@ -358,3 +358,184 @@ pub fn invalidate_cached_name(name: &str) {
 pub fn invalidate_all_cached() {
     mark_stale(|_| true);
 }
+
+/// Edits the cached answer of one call, `server_fn` with exactly these
+/// `args`, in place, so a change shows at once rather than after the
+/// mutation's round trip. Returns whether there was an answer to edit.
+///
+/// ```ignore
+/// g3_cache::update_cached(get_playlist, (id.clone(),), |playlist| {
+///     playlist.videos.retain(|video| video.id != removed);
+/// });
+/// remove_from_playlist(id.clone(), removed).await?;
+/// g3_cache::invalidate_cached_call(get_playlist, (id,));
+/// ```
+///
+/// Mounted screens show the edit without refetching. It is memory only: the
+/// persistent store keeps the server's last answer, so **follow the
+/// mutation with an invalidation**, whether it succeeded or not. The
+/// refetch replaces the guess with what the server holds, which also undoes
+/// it if the mutation failed.
+pub fn update_cached<F, Args>(server_fn: F, args: Args, update: impl FnOnce(&mut F::Output)) -> bool
+where
+    F: CacheableFn<Args>,
+    Args: Serialize,
+    F::Output: Clone + 'static,
+{
+    update_cached_key(&CacheKey::of(&server_fn, &args), update)
+}
+
+/// [`update_cached`] for every cached call of `server_fn`, whatever its
+/// arguments: a video marked watched in every cached page of a feed, say.
+/// Returns how many answers were edited.
+pub fn update_all_cached<F, Args>(server_fn: F, mut update: impl FnMut(&mut F::Output)) -> usize
+where
+    F: CacheableFn<Args>,
+    F::Output: Clone + 'static,
+{
+    let _ = server_fn;
+    let name = crate::key::fn_name::<F>();
+    edit_entries(|key| key.name() == name, &mut update)
+}
+
+/// [`update_cached`] for a read cached under a [`CacheKey`] you named.
+pub fn update_cached_key<T: Clone + 'static>(key: &CacheKey, update: impl FnOnce(&mut T)) -> bool {
+    let mut update = Some(update);
+    edit_entries(|candidate| candidate == key, &mut |value: &mut T| {
+        if let Some(update) = update.take() {
+            update(value);
+        }
+    }) > 0
+}
+
+fn edit_entries<T: Clone + 'static>(
+    matches: impl Fn(&CacheKey) -> bool,
+    update: &mut dyn FnMut(&mut T),
+) -> usize {
+    if !ENABLED {
+        return 0;
+    }
+    let edited = MEMORY.with_borrow_mut(|memory| {
+        let mut edited = 0;
+        for (key, entry) in memory.iter_mut() {
+            if !matches(key) {
+                continue;
+            }
+            let Some(current) = entry.value.downcast_ref::<T>() else {
+                continue;
+            };
+            // Copied rather than edited through the `Rc`: a screen still
+            // holding the previous value must see a change arrive, not have
+            // its value altered underneath it.
+            let mut value = current.clone();
+            update(&mut value);
+            entry.value = Rc::new(value);
+            edited += 1;
+        }
+        edited
+    });
+    if edited > 0 {
+        // Mounted reads recheck their entry. It keeps its `fetched_at`, so a
+        // fresh one shows the edit without refetching and a stale one still
+        // refetches.
+        *EPOCH.write() += 1;
+    }
+    edited
+}
+
+#[cfg(all(test, not(feature = "server")))]
+mod tests {
+    use super::*;
+    use dioxus::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static FETCHES: AtomicUsize = AtomicUsize::new(0);
+
+    fn key() -> CacheKey {
+        CacheKey::new("numbers")
+    }
+
+    #[derive(Props, Clone, PartialEq)]
+    struct Shown {
+        shown: Signal<Option<Vec<u32>>>,
+        pending: Signal<bool>,
+    }
+
+    #[component]
+    fn Reader(props: Shown) -> Element {
+        let Shown {
+            mut shown,
+            mut pending,
+        } = props;
+        let numbers = use_cached_key(key(), || async {
+            FETCHES.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![1, 2, 3])
+        });
+        let value = numbers
+            .read()
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned();
+        if *shown.peek() != value {
+            shown.set(value);
+        }
+        if *pending.peek() != numbers.pending() {
+            pending.set(numbers.pending());
+        }
+        rsx! {}
+    }
+
+    async fn settle(dom: &mut VirtualDom) {
+        for _ in 0..20 {
+            tokio::select! {
+                () = dom.wait_for_work() => { dom.render_immediate(&mut dioxus_core::NoOpMutations); }
+                () = tokio::time::sleep(std::time::Duration::from_millis(20)) => return,
+            }
+        }
+    }
+
+    /// One test, in order: the steps share the thread-local cache.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_update_shows_at_once_and_an_invalidation_reconciles_it() {
+        let mut dom = VirtualDom::new(|| {
+            let shown = use_signal(|| None);
+            let pending = use_signal(|| false);
+            use_context_provider(|| (shown, pending));
+            rsx! { Reader { shown, pending } }
+        });
+        dom.rebuild_in_place();
+        settle(&mut dom).await;
+        let (shown, pending) = dom.in_scope(ScopeId::APP, || {
+            consume_context::<(Signal<Option<Vec<u32>>>, Signal<bool>)>()
+        });
+        assert_eq!(dom.in_runtime(|| shown()), Some(vec![1, 2, 3]));
+        assert_eq!(FETCHES.load(Ordering::SeqCst), 1);
+        assert!(!dom.in_runtime(|| pending()));
+
+        let edited =
+            dom.in_runtime(|| update_cached_key(&key(), |numbers: &mut Vec<u32>| numbers.push(4)));
+        assert!(edited);
+        settle(&mut dom).await;
+        assert_eq!(dom.in_runtime(|| shown()), Some(vec![1, 2, 3, 4]));
+        assert_eq!(
+            FETCHES.load(Ordering::SeqCst),
+            1,
+            "an update must not refetch"
+        );
+
+        // A key nothing has cached: nothing to edit, and no wasted rerun.
+        assert!(
+            !dom.in_runtime(|| update_cached_key(&CacheKey::new("absent"), |_: &mut Vec<u32>| {}))
+        );
+
+        dom.in_runtime(|| invalidate_cached_key(&key()));
+        settle(&mut dom).await;
+        assert_eq!(
+            dom.in_runtime(|| shown()),
+            Some(vec![1, 2, 3]),
+            "the refetch replaces the guess"
+        );
+        assert_eq!(FETCHES.load(Ordering::SeqCst), 2);
+        assert!(!dom.in_runtime(|| pending()));
+    }
+}

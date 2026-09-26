@@ -1,11 +1,11 @@
-//! Where cached reads outlive the app: a redb file on mobile, IndexedDB in
+//! Where cached reads outlive the app: a redb file on mobile and desktop, IndexedDB in
 //! the browser, and nowhere on the server. Every backend stores the same
 //! thing (a JSON string per key) and fails soft: a store that can't be read
 //! or written is just a cache miss.
 
 pub(crate) use backend::{clear, load, save};
 
-#[cfg(all(feature = "mobile", not(feature = "server")))]
+#[cfg(all(any(feature = "mobile", feature = "desktop"), not(feature = "server")))]
 mod backend {
     use redb::{Database, ReadableDatabase, TableDefinition};
     use std::{path::PathBuf, sync::OnceLock};
@@ -55,9 +55,14 @@ mod backend {
         Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Caches"))
     }
 
-    /// Desktop runs of a mobile build (the simulator host, `dx serve`).
+    /// Desktop apps keep it in the user's cache directory. Desktop runs of
+    /// a mobile build (the simulator host, `dx serve`) use the temp directory.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn cache_dir() -> Option<PathBuf> {
+        #[cfg(feature = "desktop")]
+        if let Some(dir) = dirs::cache_dir() {
+            return Some(dir.join("g3-cache"));
+        }
         Some(std::env::temp_dir().join("g3-cache"))
     }
 
@@ -93,6 +98,7 @@ mod backend {
     feature = "web",
     target_arch = "wasm32",
     not(feature = "mobile"),
+    not(feature = "desktop"),
     not(feature = "server")
 ))]
 mod backend {
@@ -156,14 +162,16 @@ mod backend {
 }
 
 /// No persistent store: the server (which must not cache per-user data), a
-/// native check of a web build, or a build with neither `web` nor `mobile`.
+/// native check of a web build, or a build with none of `web`, `mobile` or
+/// `desktop`.
 /// The in-memory cache still works; nothing survives a restart.
 #[cfg(not(any(
-    all(feature = "mobile", not(feature = "server")),
+    all(any(feature = "mobile", feature = "desktop"), not(feature = "server")),
     all(
         feature = "web",
         target_arch = "wasm32",
         not(feature = "mobile"),
+        not(feature = "desktop"),
         not(feature = "server")
     )
 )))]

@@ -13,24 +13,30 @@ the wrong place.
 
 ```toml
 [dependencies]
-g3-cache = "0.1"
+g3-cache = "0.2"
 
 [features]
 web = ["dioxus/web", "g3-cache/web"]          # IndexedDB store
 mobile = ["dioxus/mobile", "g3-cache/mobile"] # redb file store
+desktop = ["dioxus/desktop", "g3-cache/desktop"] # redb file store
 server = ["dioxus/server", "g3-cache/server"] # server + CDN caches; client cache off
 ```
 
 ## Usage
 
 ```rust
-use g3_cache::{cache_shared, invalidate_cached, use_cached};
+use g3_cache::{cache_shared, invalidate_cached, update_cached, use_cached};
 
 // A screen: show the last known answer at once, refetch in the background.
 let media = use_cached(get_media, (id.clone(),));
 
 // After a mutation: refetch what it changed.
 save_rating(id.clone(), score).await?;
+invalidate_cached(get_my_rating);
+
+// Or show it at once, and let the invalidation reconcile it.
+update_cached(get_my_rating, (id.clone(),), |rating| *rating = Some(score));
+let saved = save_rating(id.clone(), score).await;
 invalidate_cached(get_my_rating);
 
 // A public read: cached at the CDN and on the server for 5 minutes.

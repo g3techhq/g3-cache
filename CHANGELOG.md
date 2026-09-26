@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-26
+
+### Added
+
+- `update_cached`, `update_all_cached` and `update_cached_key`: edit what
+  mounted screens show before a mutation's round trip, reconciled by the
+  invalidation that follows it.
+- `Cached::pending`: whether a fetch is in flight, for pull-to-refresh.
+- A `desktop` feature: the redb store, in the user's cache directory.
+
 ## [0.1.0] - 2026-09-25
 
 ### Added

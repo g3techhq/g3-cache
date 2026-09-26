@@ -47,11 +47,12 @@
 //!
 //! ```toml
 //! [dependencies]
-//! g3-cache = "0.1"
+//! g3-cache = "0.2"
 //!
 //! [features]
 //! web = ["dioxus/web", "g3-cache/web"]          # IndexedDB store
 //! mobile = ["dioxus/mobile", "g3-cache/mobile"] # redb file store
+//! desktop = ["dioxus/desktop", "g3-cache/desktop"] # redb file store
 //! server = ["dioxus/server", "g3-cache/server"] # server + CDN caches; client cache off
 //! ```
 //!
@@ -103,6 +104,23 @@
 //! Don't use it for reads that change with every keystroke (use
 //! `use_resource`), or in a handler that must act on current server state
 //! (call the server function directly).
+//!
+//! ## Showing a change at once
+//!
+//! A tap that waits for a round trip feels broken. [`update_cached`] edits
+//! what mounted screens show before the mutation is sent; the invalidation
+//! after it replaces the guess with the server's answer, and so also undoes
+//! it if the mutation failed:
+//!
+//! ```ignore
+//! update_all_cached(get_feed_page, |page| page.mark_watched(&video_id));
+//! let saved = set_watched(video_id.clone(), true).await;
+//! invalidate_cached(get_feed_page);
+//! saved?;
+//! ```
+//!
+//! [`Cached::pending`] says whether a refetch is in flight, for a
+//! pull-to-refresh spinner over a list that is already showing.
 //!
 //! ## Several devices
 //!
@@ -176,11 +194,13 @@
 //!
 //! - `web`: the persistent store is IndexedDB.
 //! - `mobile`: the persistent store is a redb file in the OS cache directory.
+//! - `desktop`: the same redb store, in the user's cache directory.
 //! - `server`: `ServerCache`, `cdn_cache_guard` and the `server` and `cdn`
 //!   modules. Turns the client cache off: one server process renders for
 //!   every visitor, so nothing per-user may be kept there.
 //!
-//! With neither `web` nor `mobile`, the client cache works in memory only.
+//! With none of `web`, `mobile` or `desktop`, the client cache works in
+//! memory only.
 
 #![warn(missing_docs)]
 
@@ -200,7 +220,8 @@ pub use server::ServerCache;
 pub use client::{
     CacheConfig, CacheOptions, Cached, invalidate_all_cached, invalidate_cached,
     invalidate_cached_call, invalidate_cached_key, invalidate_cached_name, set_cache_owner,
-    use_cached, use_cached_key, use_cached_key_with, use_cached_with, use_client_cache,
+    update_all_cached, update_cached, update_cached_key, use_cached, use_cached_key,
+    use_cached_key_with, use_cached_with, use_client_cache,
 };
 pub use g3_cache_macros::cache_shared;
 pub use key::{CacheKey, CacheableFn};
