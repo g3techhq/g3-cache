@@ -181,6 +181,10 @@ where
     let mut data = use_signal(|| remembered::<T>(&key).map(|(value, _)| Ok(value)));
     let mut current_key = use_signal(|| key.clone());
     let mut pending = use_signal(|| false);
+    // A write during render, which components should not do. It is safe
+    // here: it happens only when the key changed, and the comparison peeks,
+    // so a re-render it causes writes nothing. It is how a new argument
+    // reaches the resource below without `use_reactive!`.
     if *current_key.peek() != key {
         current_key.set(key);
     }
