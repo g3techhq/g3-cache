@@ -8,6 +8,8 @@ pre-commit:
     spelling:
       glob: "*.{rs,toml,md,txt,js,cjs,mjs,ts,tsx,json,jsonc,yml,yaml,css,html,surql}"
       run: typos --force-exclude {staged_files}
+    local-dependencies:
+      run: sh scripts/check-local-dependencies.sh
     whitespace:
       run: git diff --cached --check
 

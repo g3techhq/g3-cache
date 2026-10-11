@@ -47,6 +47,15 @@ pub async fn get_trending(media_type: Option<MediaType>) -> Result<Vec<Media>> {
 
 ## Choosing a cache
 
+The client stores default to 256 answers and 32 MiB of JSON payload each.
+Configure them with `CacheConfig::max_entries` and `CacheConfig::max_bytes`;
+zero disables storage. Memory evicts the least recently read answers, while
+disk evicts the oldest saved ones and removes expired answers on writes and
+owner restoration. Payload bytes are an estimate, excluding allocator and
+database overhead. Mounted screens still hold their displayed answer.
+Owner changes hide previous answers immediately and discard old requests
+that finish after the switch.
+
 | | Client | Server | CDN |
 |---|---|---|---|
 | **For** | Showing the last known data at once | Not repeating slow or rate-limited work | Answering identical public requests without the server |

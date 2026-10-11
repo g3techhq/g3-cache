@@ -3,11 +3,62 @@
 //! thing (a JSON string per key) and fails soft: a store that can't be read
 //! or written is just a cache miss.
 
-pub(crate) use backend::{clear, load, save};
+pub(crate) use backend::{clear, load, prune, save};
+
+/// Oldest saved answers go first; malformed and expired entries are removed
+/// even when the store is below its capacity. The owner marker is metadata.
+#[cfg(any(
+    test,
+    all(
+        not(feature = "server"),
+        any(
+            feature = "mobile",
+            feature = "desktop",
+            all(feature = "web", target_arch = "wasm32")
+        )
+    )
+))]
+fn eviction_keys(
+    entries: Vec<(String, String)>,
+    limits: &super::CacheConfig,
+    now: i64,
+) -> Vec<String> {
+    let mut remove = Vec::new();
+    let mut retained = Vec::new();
+    let keep_for = i64::try_from(limits.keep_for.as_millis()).unwrap_or(i64::MAX);
+    for (key, value) in entries {
+        if key == super::OWNER_KEY {
+            continue;
+        }
+        let saved_at = serde_json::from_str::<serde_json::Value>(&value)
+            .ok()
+            .and_then(|json| json.get("saved_at").and_then(serde_json::Value::as_i64));
+        match saved_at {
+            Some(saved_at)
+                if now.saturating_sub(saved_at) < keep_for && value.len() <= limits.max_bytes =>
+            {
+                retained.push((saved_at, key, value.len()))
+            }
+            _ => remove.push(key),
+        }
+    }
+    retained.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let mut bytes = retained.iter().map(|entry| entry.2).sum::<usize>();
+    let mut count = retained.len();
+    for (_, key, size) in retained {
+        if count <= limits.max_entries && bytes <= limits.max_bytes {
+            break;
+        }
+        remove.push(key);
+        count -= 1;
+        bytes -= size;
+    }
+    remove
+}
 
 #[cfg(all(any(feature = "mobile", feature = "desktop"), not(feature = "server")))]
 mod backend {
-    use redb::{Database, ReadableDatabase, TableDefinition};
+    use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
     use std::{path::PathBuf, sync::OnceLock};
 
     const ENTRIES: TableDefinition<&str, &str> = TableDefinition::new("entries");
@@ -73,18 +124,50 @@ mod backend {
         Some(value.value().to_string())
     }
 
-    pub(crate) async fn save(key: &str, value: &str) {
+    pub(crate) async fn save(key: &str, value: &str, generation: u64) {
+        if generation != super::super::owner_generation() {
+            return;
+        }
         let Some(database) = database() else { return };
         let Ok(write) = database.begin_write() else {
             return;
         };
         if let Ok(mut table) = write.open_table(ENTRIES) {
             let _ = table.insert(key, value);
+            trim(&mut table);
         }
         let _ = write.commit();
     }
 
-    pub(crate) async fn clear() {
+    fn trim(table: &mut redb::Table<'_, &str, &str>) {
+        let Ok(iter) = table.iter() else { return };
+        let entries = iter
+            .filter_map(Result::ok)
+            .map(|(key, value)| (key.value().to_string(), value.value().to_string()))
+            .collect();
+        for key in super::eviction_keys(entries, super::super::config(), super::super::now_ms()) {
+            let _ = table.remove(key.as_str());
+        }
+    }
+
+    pub(crate) async fn prune(generation: u64) {
+        if generation != super::super::owner_generation() {
+            return;
+        }
+        let Some(database) = database() else { return };
+        let Ok(write) = database.begin_write() else {
+            return;
+        };
+        if let Ok(mut table) = write.open_table(ENTRIES) {
+            trim(&mut table);
+        }
+        let _ = write.commit();
+    }
+
+    pub(crate) async fn clear(generation: u64) {
+        if generation != super::super::owner_generation() {
+            return;
+        }
         let Some(database) = database() else { return };
         let Ok(write) = database.begin_write() else {
             return;
@@ -158,10 +241,13 @@ mod backend {
         .flatten()
     }
 
-    pub(crate) async fn save(key: &str, value: &str) {
+    pub(crate) async fn save(key: &str, value: &str, generation: u64) {
         let (key, value) = (key.to_string(), value.to_string());
         detached(async move {
             let Some(database) = open().await else { return };
+            if generation != super::super::owner_generation() {
+                return;
+            }
             let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite)
             else {
                 return;
@@ -170,15 +256,50 @@ mod backend {
                 let _ = store
                     .put(&JsValue::from_str(&value), Some(&JsValue::from_str(&key)))
                     .await;
+                trim(&store).await;
             }
             let _ = transaction.done().await;
         })
         .await;
     }
 
-    pub(crate) async fn clear() {
+    async fn trim(store: &rexie::Store) {
+        let Ok(entries) = store.scan(None, None, None, None).await else {
+            return;
+        };
+        let entries = entries
+            .into_iter()
+            .filter_map(|(key, value)| Some((key.as_string()?, value.as_string()?)))
+            .collect();
+        for key in super::eviction_keys(entries, super::super::config(), super::super::now_ms()) {
+            let _ = store.delete(JsValue::from_str(&key)).await;
+        }
+    }
+
+    pub(crate) async fn prune(generation: u64) {
         detached(async move {
             let Some(database) = open().await else { return };
+            if generation != super::super::owner_generation() {
+                return;
+            }
+            let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite)
+            else {
+                return;
+            };
+            if let Ok(store) = transaction.store(ENTRIES) {
+                trim(&store).await;
+            }
+            let _ = transaction.done().await;
+        })
+        .await;
+    }
+
+    pub(crate) async fn clear(generation: u64) {
+        detached(async move {
+            let Some(database) = open().await else { return };
+            if generation != super::super::owner_generation() {
+                return;
+            }
             let Ok(transaction) = database.transaction(&[ENTRIES], TransactionMode::ReadWrite)
             else {
                 return;
@@ -211,7 +332,35 @@ mod backend {
         None
     }
 
-    pub(crate) async fn save(_key: &str, _value: &str) {}
+    pub(crate) async fn save(_key: &str, _value: &str, _generation: u64) {}
 
-    pub(crate) async fn clear() {}
+    pub(crate) async fn clear(_generation: u64) {}
+
+    pub(crate) async fn prune(_generation: u64) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persistent_eviction_removes_expiry_then_oldest_and_keeps_the_owner() {
+        let answer =
+            |saved_at| serde_json::json!({"saved_at": saved_at, "value": [1, 2, 3]}).to_string();
+        let limits = super::super::CacheConfig::new("test")
+            .keep_for(std::time::Duration::from_millis(100))
+            .max_entries(1);
+        let entries = vec![
+            (super::super::OWNER_KEY.into(), "account-a".into()),
+            ("expired".into(), answer(10)),
+            ("older".into(), answer(950)),
+            ("newest".into(), answer(990)),
+            ("invalid".into(), "broken".into()),
+        ];
+        let keys = eviction_keys(entries.clone(), &limits, 1000);
+        assert_eq!(keys, ["expired", "invalid", "older"]);
+        let keys = eviction_keys(entries, &limits.max_bytes(1), 1000);
+        assert!(keys.contains(&"newest".to_string()));
+        assert!(!keys.contains(&super::super::OWNER_KEY.to_string()));
+    }
 }

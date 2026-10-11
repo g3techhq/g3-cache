@@ -45,6 +45,8 @@ pub struct CacheConfig {
     pub(crate) keep_for: Duration,
     pub(crate) revalidate_on_focus: bool,
     pub(crate) focus_gap: Duration,
+    pub(crate) max_entries: usize,
+    pub(crate) max_bytes: usize,
 }
 
 impl CacheConfig {
@@ -58,12 +60,27 @@ impl CacheConfig {
             keep_for: Duration::from_secs(7 * 24 * 60 * 60),
             revalidate_on_focus: true,
             focus_gap: Duration::from_secs(30),
+            max_entries: 256,
+            max_bytes: 32 * 1024 * 1024,
         }
     }
 
     /// The persistent store's name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Maximum answers in each store. Default 256; zero disables storage.
+    pub fn max_entries(mut self, count: usize) -> Self {
+        self.max_entries = count;
+        self
+    }
+
+    /// Maximum combined JSON payload bytes in each store. Default 32 MiB.
+    /// This estimates payload size, not the allocator or database overhead.
+    pub fn max_bytes(mut self, bytes: usize) -> Self {
+        self.max_bytes = bytes;
+        self
     }
 
     /// How recent a fetch a screen may reuse instead of repeating it when it
@@ -171,9 +188,14 @@ async fn revalidate_on_focus() {
 struct MemoryEntry {
     value: Rc<dyn Any>,
     fetched_at: i64,
+    accessed: u64,
+    bytes: usize,
+    measure: fn(&dyn Any) -> usize,
 }
 
 thread_local! {
+    static OWNER_GENERATION: Cell<u64> = const { Cell::new(0) };
+    static ACCESS: Cell<u64> = const { Cell::new(0) };
     static MEMORY: RefCell<BTreeMap<CacheKey, MemoryEntry>> = const { RefCell::new(BTreeMap::new()) };
     /// Whether this run has called `set_cache_owner`, which allows writing to the
     /// persistent store.
@@ -181,6 +203,31 @@ thread_local! {
     /// Whether the persistent store holds a signed-in owner's data, which
     /// allows reading it. Checked once, on the first restore.
     static STORE_OWNED: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+pub(crate) fn owner_generation() -> u64 {
+    OWNER_GENERATION.get()
+}
+
+fn next_access() -> u64 {
+    let next = ACCESS.get().wrapping_add(1);
+    ACCESS.set(next);
+    next
+}
+
+fn trim_memory(memory: &mut BTreeMap<CacheKey, MemoryEntry>, limits: &CacheConfig) {
+    while memory.len() > limits.max_entries
+        || memory.values().map(|entry| entry.bytes).sum::<usize>() > limits.max_bytes
+    {
+        let Some(key) = memory
+            .iter()
+            .min_by_key(|(_, entry)| entry.accessed)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        memory.remove(&key);
+    }
 }
 
 /// Bumped by every invalidation and by [`set_cache_owner`]; every cached read
@@ -196,20 +243,39 @@ pub(crate) fn remembered<T: Clone + 'static>(key: &CacheKey) -> Option<(T, i64)>
     if !ENABLED {
         return None;
     }
-    MEMORY.with_borrow(|memory| {
-        let entry = memory.get(key)?;
+    MEMORY.with_borrow_mut(|memory| {
+        let entry = memory.get_mut(key)?;
+        entry.accessed = next_access();
         let value = entry.value.downcast_ref::<T>()?.clone();
         Some((value, entry.fetched_at))
     })
 }
 
-pub(crate) fn remember<T: 'static>(key: &CacheKey, value: T, fetched_at: i64) {
+pub(crate) fn remember<T: Serialize + 'static>(key: &CacheKey, value: T, fetched_at: i64) {
     if ENABLED {
+        let Ok(bytes) = serde_json::to_vec(&value).map(|json| json.len()) else {
+            return;
+        };
+        if bytes > config().max_bytes || config().max_entries == 0 {
+            MEMORY.with_borrow_mut(|memory| memory.remove(key));
+            return;
+        }
         let entry = MemoryEntry {
             value: Rc::new(value),
             fetched_at,
+            accessed: next_access(),
+            bytes,
+            measure: |value| {
+                value
+                    .downcast_ref::<T>()
+                    .and_then(|value| serde_json::to_vec(value).ok())
+                    .map_or(usize::MAX, |json| json.len())
+            },
         };
-        MEMORY.with_borrow_mut(|memory| memory.insert(key.clone(), entry));
+        MEMORY.with_borrow_mut(|memory| {
+            memory.insert(key.clone(), entry);
+            trim_memory(memory, config());
+        });
     }
 }
 
@@ -220,10 +286,14 @@ struct Stored<T> {
 }
 
 pub(crate) async fn restore<T: serde::de::DeserializeOwned>(key: &CacheKey) -> Option<T> {
+    let generation = owner_generation();
     if !ENABLED || !store_owned().await {
         return None;
     }
     let stored: Stored<T> = serde_json::from_str(&store::load(&key.storage_key()).await?).ok()?;
+    if generation != owner_generation() {
+        return None;
+    }
     let keep_for = i64::try_from(config().keep_for.as_millis()).unwrap_or(i64::MAX);
     (now_ms().saturating_sub(stored.saved_at) < keep_for).then_some(stored.value)
 }
@@ -237,17 +307,21 @@ pub(crate) async fn persist<T: Serialize>(key: &CacheKey, value: &T) {
         value,
     };
     if let Ok(json) = serde_json::to_string(&stored) {
-        store::save(&key.storage_key(), &json).await;
+        store::save(&key.storage_key(), &json, owner_generation()).await;
     }
 }
 
 async fn store_owned() -> bool {
+    let generation = owner_generation();
     if let Some(owned) = STORE_OWNED.get() {
         return owned;
     }
     let owned = store::load(OWNER_KEY)
         .await
         .is_some_and(|owner| !owner.is_empty());
+    if generation != owner_generation() {
+        return false;
+    }
     STORE_OWNED.set(Some(owned));
     owned
 }
@@ -274,16 +348,34 @@ pub async fn set_cache_owner(owner: Option<String>) {
     if !ENABLED {
         return;
     }
-    OWNER_SET.set(true);
+    let generation = owner_generation().wrapping_add(1);
+    OWNER_GENERATION.set(generation);
+    OWNER_SET.set(false);
+    STORE_OWNED.set(Some(false));
+    MEMORY.with_borrow_mut(BTreeMap::clear);
+    *EPOCH.write() += 1;
     let owner = owner.unwrap_or_default();
-    if !owner.is_empty() && store::load(OWNER_KEY).await.as_deref() == Some(owner.as_str()) {
-        STORE_OWNED.set(Some(true));
+    let stored_owner = store::load(OWNER_KEY).await;
+    if generation != owner_generation() {
         return;
     }
-    MEMORY.with_borrow_mut(BTreeMap::clear);
-    store::clear().await;
-    store::save(OWNER_KEY, &owner).await;
+    if !owner.is_empty() && stored_owner.as_deref() == Some(owner.as_str()) {
+        STORE_OWNED.set(Some(true));
+        OWNER_SET.set(true);
+        store::prune(generation).await;
+        *EPOCH.write() += 1;
+        return;
+    }
+    store::clear(generation).await;
+    if generation != owner_generation() {
+        return;
+    }
+    store::save(OWNER_KEY, &owner, generation).await;
+    if generation != owner_generation() {
+        return;
+    }
     STORE_OWNED.set(Some(!owner.is_empty()));
+    OWNER_SET.set(!owner.is_empty());
     *EPOCH.write() += 1;
 }
 
@@ -434,9 +526,12 @@ fn edit_entries<T: Clone + 'static>(
             // its value altered underneath it.
             let mut value = current.clone();
             update(&mut value);
+            entry.bytes = (entry.measure)(&value);
+            entry.accessed = next_access();
             entry.value = Rc::new(value);
             edited += 1;
         }
+        trim_memory(memory, config());
         edited
     });
     if edited > 0 {
@@ -455,6 +550,56 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static FETCHES: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn capacity_evicts_the_least_recently_read_payload() {
+        MEMORY.with_borrow_mut(BTreeMap::clear);
+        for name in ["old", "recent", "new"] {
+            remember(&CacheKey::new(name), vec![1_u8; 8], 100);
+        }
+        remembered::<Vec<u8>>(&CacheKey::new("old")).unwrap();
+        MEMORY.with_borrow_mut(|memory| {
+            trim_memory(memory, &CacheConfig::new("test").max_entries(2))
+        });
+        assert!(remembered::<Vec<u8>>(&CacheKey::new("recent")).is_none());
+        assert!(remembered::<Vec<u8>>(&CacheKey::new("old")).is_some());
+        MEMORY
+            .with_borrow_mut(|memory| trim_memory(memory, &CacheConfig::new("test").max_bytes(1)));
+        assert!(MEMORY.with_borrow(BTreeMap::is_empty));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_owner_switch_hides_a_mounted_answer_before_refetch() {
+        let first_generation = owner_generation();
+        remember(&CacheKey::new("owner-switch"), first_generation, STALE);
+        let mut dom = VirtualDom::new(|| {
+            let cached = use_cached_key(CacheKey::new("owner-switch"), || {
+                let generation = owner_generation();
+                async move { Ok(generation) }
+            });
+            use_context_provider(|| cached);
+            let _ = cached.read();
+            rsx! {}
+        });
+        dom.rebuild_in_place();
+        settle(&mut dom).await;
+        let cached = dom.in_scope(ScopeId::APP, consume_context::<Cached<u64>>);
+        assert_eq!(
+            dom.in_runtime(|| cached.peek().as_ref().unwrap().as_ref().unwrap().to_owned()),
+            first_generation
+        );
+        dom.in_scope(ScopeId::APP, || {
+            spawn(async move {
+                set_cache_owner(Some("another-account".into())).await;
+                // The resource has not rerun yet. Its old signal must be hidden.
+                assert!(cached.peek().is_none());
+            })
+        });
+        settle(&mut dom).await;
+        let answer =
+            dom.in_runtime(|| cached.peek().as_ref().unwrap().as_ref().unwrap().to_owned());
+        assert_eq!(answer, first_generation + 1);
+    }
 
     fn key() -> CacheKey {
         CacheKey::new("numbers")

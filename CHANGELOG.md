@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reject staged local shared-library dependencies in the commit hook.
+
+- Bound client memory and persistent storage with configurable `max_entries` (256) and `max_bytes` (32 MiB payload estimate); evict old entries and remove expired disk answers.
+- Reject late restores and fetches from previous cache owners and immediately hide their mounted answers.
+
 ## [0.2.0] - 2026-09-26
 
 ### Added

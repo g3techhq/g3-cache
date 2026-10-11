@@ -1,5 +1,6 @@
 use super::{
-    EPOCH, STALE, config, invalidate_cached_key, now_ms, persist, remember, remembered, restore,
+    EPOCH, STALE, config, invalidate_cached_key, now_ms, owner_generation, persist, remember,
+    remembered, restore,
 };
 use crate::{CacheKey, CacheableFn};
 use dioxus::prelude::{
@@ -37,6 +38,8 @@ type Fetch<T> = Rc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<T>>>>>;
 /// `Copy`, like a signal.
 pub struct Cached<T: 'static> {
     data: Signal<Option<Result<T>>>,
+    empty: Signal<Option<Result<T>>>,
+    generation: Signal<u64>,
     key: Signal<CacheKey>,
     pending: Signal<bool>,
 }
@@ -55,13 +58,22 @@ impl<T: 'static> Cached<T> {
     /// there was nothing to show instead; while offline, the last value
     /// stays.
     pub fn read(&self) -> ReadableRef<'_, Signal<Option<Result<T>>>> {
-        self.data.read()
+        let _ = EPOCH();
+        if *self.generation.peek() != owner_generation() {
+            self.empty.read()
+        } else {
+            self.data.read()
+        }
     }
 
     /// [`read`](Self::read) without subscribing: for an event handler, which
     /// wants the value now and must not rerender when it changes.
     pub fn peek(&self) -> ReadableRef<'_, Signal<Option<Result<T>>>> {
-        self.data.peek()
+        if *self.generation.peek() != owner_generation() {
+            self.empty.peek()
+        } else {
+            self.data.peek()
+        }
     }
 
     /// Refetches now, keeping the current value on screen meanwhile. For a
@@ -179,6 +191,8 @@ where
     Fut: Future<Output = Result<T>> + 'static,
 {
     let mut data = use_signal(|| remembered::<T>(&key).map(|(value, _)| Ok(value)));
+    let empty = use_signal(|| None);
+    let mut data_generation = use_signal(owner_generation);
     let mut current_key = use_signal(|| key.clone());
     let mut pending = use_signal(|| false);
     // A write during render, which components should not do. It is safe
@@ -201,8 +215,13 @@ where
         let key = current_key();
         let _ = EPOCH();
         let fetch = latest.peek().clone();
+        let generation = owner_generation();
         async move {
             let Some(fetch) = fetch else { return };
+            if *data_generation.peek() != generation {
+                data.set(None);
+                data_generation.set(generation);
+            }
             let opening = loaded.peek().as_ref() != Some(&key);
             match remembered::<T>(&key) {
                 Some((value, fetched_at)) => {
@@ -225,10 +244,18 @@ where
                 None => match options.persist.then(|| restore::<T>(&key)) {
                     Some(restoring) => match restoring.await {
                         Some(value) => {
+                            if generation != owner_generation() {
+                                return;
+                            }
                             remember(&key, value.clone(), STALE);
                             show(&mut data, value);
                         }
-                        None => data.set(None),
+                        None => {
+                            if generation != owner_generation() {
+                                return;
+                            }
+                            data.set(None);
+                        }
                     },
                     None => data.set(None),
                 },
@@ -239,7 +266,7 @@ where
             pending.set(true);
             let result = fetch().await;
             pending.set(false);
-            if *current_key.peek() != key {
+            if *current_key.peek() != key || generation != owner_generation() {
                 // The screen moved on to another key while this was in flight.
                 return;
             }
@@ -263,6 +290,8 @@ where
 
     Cached {
         data,
+        empty,
+        generation: data_generation,
         key: current_key,
         pending,
     }

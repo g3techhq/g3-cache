@@ -18,7 +18,14 @@ permissions:
   id-token: write
 
 jobs:
+  quality:
+    name: Quality gate for the selected commit
+    uses: g3techhq/.github/.github/workflows/rust-quality.yml@da47dc747376edcf6ecc0cc986aec51f5084bf42 # v1.0.0
+    permissions:
+      contents: read
+
   publish:
+    needs: quality
     name: Publish g3-cache crates
     runs-on: ubuntu-latest
     environment: crates-io
@@ -51,9 +58,13 @@ jobs:
           set -euo pipefail
 
           if [[ "${DRY_RUN}" == "true" ]]; then
-            cargo publish --dry-run --manifest-path macros/Cargo.toml
-            echo "Listing package files for g3-cache; full dry-run requires g3-cache-macros to exist on crates.io first."
-            cargo package --list
+            MACROS_VERSION="$(cargo metadata --no-deps --manifest-path macros/Cargo.toml --format-version 1 | jq -r '.packages[0].version')"
+            if ! cargo info "g3-cache-macros@${MACROS_VERSION}" >/dev/null 2>&1; then
+              echo "Publish the new macros version before verifying the parent archive." >&2
+              cargo publish --dry-run --manifest-path macros/Cargo.toml
+              exit 1
+            fi
+            cargo publish --dry-run
             exit 0
           fi
 
